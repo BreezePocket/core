@@ -27,7 +27,7 @@ pub const LAMPORTS_PER_SOL: u128 = 1_000_000_000;
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug, InitSpace)]
 pub enum Product {
-    /// User locks SOL, receives yield in SOL, may end up selling SOL at the fixed price.
+    /// User locks SOL, receives yield in USDC, may end up selling SOL at the fixed price.
     SellSol,
     /// User locks USDC, receives yield in USDC, may end up buying SOL at the fixed price.
     BuySol,

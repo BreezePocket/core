@@ -18,7 +18,7 @@ import {
 const FIXED = 180n * USDC; // 180 USDC per token
 const EXPIRY = alignedExpiryAt(7, US_CLOSE);
 const SELL_AMOUNT = 10n * ASSET;
-const SELL_YIELD = ASSET / 10n;
+const SELL_YIELD = 12n * USDC; // yield is USDC for both products
 const BUY_AMOUNT = 1800n * USDC; // buys 10 tokens at 180
 const BUY_YIELD = 25n * USDC;
 
@@ -110,9 +110,10 @@ describe("open_asset_position", () => {
     nonce: nextNonce(),
   });
 
-  it("sell: locks the user's tokens and the MM's USDC, pays yield in the token", async () => {
+  it("sell: locks the user's tokens and the MM's USDC, pays yield in USDC", async () => {
     const userTok = env.tokenBalance(env.mint, env.user.publicKey);
     const mmTok = env.tokenBalance(env.mint, env.mm.publicKey);
+    const userUsdc = env.usdcBalance(env.user.publicKey);
     const mmUsdc = env.usdcBalance(env.mm.publicKey);
     const { res, position } = await env.openAssetPosition(sell());
     expectOk(res);
@@ -125,12 +126,13 @@ describe("open_asset_position", () => {
     expect(pos.settled).to.be.false;
 
     expect(env.tokenBalance(env.mint, env.user.publicKey)).to.equal(
-      userTok - SELL_AMOUNT + SELL_YIELD
+      userTok - SELL_AMOUNT
     );
-    expect(env.tokenBalance(env.mint, env.mm.publicKey)).to.equal(
-      mmTok - SELL_YIELD
+    expect(env.tokenBalance(env.mint, env.mm.publicKey)).to.equal(mmTok);
+    expect(env.usdcBalance(env.user.publicKey)).to.equal(userUsdc + SELL_YIELD);
+    expect(env.usdcBalance(env.mm.publicKey)).to.equal(
+      mmUsdc - 1800n * USDC - SELL_YIELD
     );
-    expect(env.usdcBalance(env.mm.publicKey)).to.equal(mmUsdc - 1800n * USDC);
     expect(env.tokenBalance(env.mint, position)).to.equal(SELL_AMOUNT);
     expect(env.usdcBalance(position)).to.equal(1800n * USDC);
   });

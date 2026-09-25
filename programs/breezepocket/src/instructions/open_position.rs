@@ -15,7 +15,7 @@ pub struct OpenParams {
     pub expiry_ts: i64,
     /// User collateral in base units of the product's collateral token.
     pub amount: u64,
-    /// Yield paid upfront to the user, in the same token as the collateral.
+    /// Yield paid upfront to the user, in USDC base units for both products.
     pub yield_amount: u64,
     /// Random per-quote value; part of the PDA seed so a quote can only be used once.
     pub nonce: u64,
@@ -130,13 +130,14 @@ pub fn handle_open_position(ctx: Context<OpenPosition>, params: OpenParams) -> R
                 ),
                 mm_collateral,
             )?;
-            // Yield in SOL: MM -> user, upfront.
-            system_program::transfer(
+            // Yield in USDC: MM -> user, upfront. Both products pay the premium in USDC.
+            token::transfer(
                 CpiContext::new(
-                    accounts.system_program.to_account_info(),
-                    system_program::Transfer {
-                        from: accounts.market_maker.to_account_info(),
-                        to: accounts.user.to_account_info(),
+                    accounts.token_program.to_account_info(),
+                    token::Transfer {
+                        from: accounts.mm_usdc_ata.to_account_info(),
+                        to: accounts.user_usdc_ata.to_account_info(),
+                        authority: accounts.market_maker.to_account_info(),
                     },
                 ),
                 params.yield_amount,

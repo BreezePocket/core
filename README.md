@@ -28,7 +28,7 @@ Two simple promises, each with exactly two outcomes, and **the yield is yours ei
 |---|---|---|
 | You lock | the asset (e.g. 1 NVDAon) | USDC (e.g. 1,000 USDC) |
 | You choose | a fixed price **above** today's | a fixed price **below** today's |
-| You receive **now** | yield in the asset | yield in USDC |
+| You receive **now** | yield in USDC | yield in USDC |
 | At expiry, price below / above your price | you get your asset back | you get your USDC back |
 | At expiry, price crosses your price | you sold at your price, paid in USDC | you bought at your price, paid in the asset |
 

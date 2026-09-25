@@ -28,7 +28,8 @@ describe("open_position", () => {
     fixedPrice: FIXED,
     expiryTs: EXPIRY,
     amount: 10n * LAMPORTS_PER_SOL,
-    yieldAmount: LAMPORTS_PER_SOL / 10n,
+    // Both products pay the premium in USDC.
+    yieldAmount: 12n * USDC,
     nonce: nextNonce(),
   });
 
@@ -128,11 +129,12 @@ describe("open_position", () => {
   });
 
   describe("Sell SOL happy path", () => {
-    it("locks user SOL, MM USDC and pays yield in SOL, with MM as fee payer", async () => {
+    it("locks user SOL, MM USDC and pays yield in USDC, with MM as fee payer", async () => {
       const p = base();
       const userSolBefore = env.sol(env.user.publicKey);
       const mmSolBefore = env.sol(env.mm.publicKey);
       const mmUsdcBefore = env.usdcBalance(env.mm.publicKey);
+      const userUsdcBefore = env.usdcBalance(env.user.publicKey);
 
       const { res, position } = await env.openPosition(p);
       expectOk(res);
@@ -148,15 +150,16 @@ describe("open_position", () => {
       expect(BigInt(pos.yieldAmount.toString())).to.equal(p.yieldAmount);
       expect(pos.settled).to.be.false;
 
-      // User: -amount +yield, no fees.
-      expect(env.sol(env.user.publicKey)).to.equal(
-        userSolBefore - p.amount + p.yieldAmount
+      // User: -amount SOL, +yield USDC, no fees.
+      expect(env.sol(env.user.publicKey)).to.equal(userSolBefore - p.amount);
+      expect(env.usdcBalance(env.user.publicKey)).to.equal(
+        userUsdcBefore + p.yieldAmount
       );
-      // MM paid yield, fee and rent for position + vault (+ nothing for the user ATA, which exists).
-      expect(env.sol(env.mm.publicKey) < mmSolBefore - p.yieldAmount).to.be
-        .true;
+      // MM paid the fee and rent for position + vault (+ nothing for the user ATA, which exists).
+      expect(env.sol(env.mm.publicKey) < mmSolBefore).to.be.true;
+      // MM USDC: the payment leg plus the yield.
       expect(env.usdcBalance(env.mm.publicKey)).to.equal(
-        mmUsdcBefore - 2500n * USDC
+        mmUsdcBefore - 2500n * USDC - p.yieldAmount
       );
       expect(env.tokenAccountBalance(env.vault(position))).to.equal(
         2500n * USDC
@@ -174,7 +177,8 @@ describe("open_position", () => {
       expect(env.svm.getAccount(env.ata(freshUser.publicKey))).to.be.null;
       const { res } = await env.openPosition({ ...base(), user: freshUser });
       expectOk(res);
-      expect(env.usdcBalance(freshUser.publicKey)).to.equal(0n);
+      // The account exists and holds the upfront yield.
+      expect(env.usdcBalance(freshUser.publicKey)).to.equal(base().yieldAmount);
       expect(env.svm.getAccount(env.ata(freshUser.publicKey))).to.not.be.null;
     });
   });

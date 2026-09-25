@@ -16,7 +16,7 @@ import {
 const FIXED = 250n * USDC;
 const EXPIRY = alignedExpiry(7);
 const SELL_AMOUNT = 10n * LAMPORTS_PER_SOL; // 10 SOL
-const SELL_YIELD = LAMPORTS_PER_SOL / 10n;
+const SELL_YIELD = 12n * USDC; // yield is USDC for both products
 const BUY_AMOUNT = 2500n * USDC; // buys 10 SOL at 250
 const BUY_YIELD = 40n * USDC;
 
@@ -283,8 +283,8 @@ describe("settle", () => {
       for (const p of [sellPos, buyPos, thirdPos])
         expectOk(await env.settle(p));
       expect((await env.fetchPosition(thirdPos)).settled).to.be.true;
-      // 1 SOL sold at 200 => 200 USDC to the other user.
-      expect(env.usdcBalance(otherUser.publicKey)).to.equal(200n * USDC);
+      // 1 SOL sold at 200 => 200 USDC to the other user, on top of the 1 USDC upfront yield.
+      expect(env.usdcBalance(otherUser.publicKey)).to.equal(201n * USDC);
     });
   });
 });

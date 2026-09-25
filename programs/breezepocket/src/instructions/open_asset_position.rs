@@ -131,15 +131,15 @@ pub fn handle_open_asset_position(
     require!(mm_collateral > 0, ErrorCode::InvalidAmount);
 
     let a = &ctx.accounts;
-    // (user's collateral in, MM's counter-leg in, yield out) per product.
+    // (user's collateral in, MM's counter-leg in, yield out) per product. Yield is USDC either way.
     let (user_from, user_to, mm_from, mm_to, yield_from, yield_to) = match params.product {
         Product::SellSol => (
             &a.user_asset_ata,
             &a.position_asset_vault,
             &a.mm_usdc_ata,
             &a.position_usdc_vault,
-            &a.mm_asset_ata,
-            &a.user_asset_ata,
+            &a.mm_usdc_ata,
+            &a.user_usdc_ata,
         ),
         Product::BuySol => (
             &a.user_usdc_ata,

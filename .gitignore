@@ -1,0 +1,12 @@
+.anchor
+.DS_Store
+target
+**/*.rs.bk
+node_modules
+test-ledger
+.yarn
+# Never commit keypairs: program upgrade authority, governance, price poster, MM.
+keys/
+*.json.key
+.env
+*.log

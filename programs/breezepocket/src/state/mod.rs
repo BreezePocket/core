@@ -4,6 +4,12 @@ use anchor_lang::prelude::*;
 pub const CONFIG_SEED: &[u8] = b"config";
 pub const POSITION_SEED: &[u8] = b"position";
 pub const SETTLEMENT_PRICE_SEED: &[u8] = b"settlement_price";
+pub const ASSET_SEED: &[u8] = b"asset";
+pub const ASSET_POSITION_SEED: &[u8] = b"asset_position";
+pub const ASSET_PRICE_SEED: &[u8] = b"asset_price";
+
+/// Longest symbol a listed asset may carry (e.g. "NVDAon", "POLYMARKET").
+pub const MAX_SYMBOL_LEN: usize = 16;
 
 /// Number of governance keys and the threshold that must sign.
 pub const GOVERNANCE_KEYS: usize = 5;
@@ -120,6 +126,63 @@ pub struct PositionAccount {
     pub bump: u8,
 }
 
+/// An SPL token the program can settle besides SOL, listed by governance. Its
+/// positions pair the token with USDC exactly as SOL positions do; `Product::SellSol`
+/// means "sell the asset" and `Product::BuySol` "buy the asset" for these.
+#[account]
+#[derive(InitSpace)]
+pub struct AssetConfig {
+    pub mint: Pubkey,
+    /// The symbol the desk and frontend use, e.g. "NVDAon".
+    #[max_len(MAX_SYMBOL_LEN)]
+    pub symbol: String,
+    /// Copied from the mint at listing.
+    pub decimals: u8,
+    /// Seconds after 00:00 UTC every expiry must land on: 08:00 for assets priced off
+    /// Deribit, 20:00 for US equities (the 16:00 New York close).
+    pub expiry_time_of_day: i64,
+    pub bump: u8,
+}
+
+/// A position on a listed asset. Both legs are SPL tokens held in the position's
+/// associated token accounts: `asset_mint` and USDC.
+#[account]
+#[derive(InitSpace)]
+pub struct AssetPosition {
+    pub user: Pubkey,
+    pub market_maker: Pubkey,
+    pub asset_mint: Pubkey,
+    /// SellSol: the user locks the asset. BuySol: the user locks USDC.
+    pub product: Product,
+    /// USDC base units per whole asset token.
+    pub fixed_price: u64,
+    /// Aligned to the asset's `expiry_time_of_day`.
+    pub expiry_ts: i64,
+    /// User collateral: asset base units (SellSol) or USDC (BuySol).
+    pub user_collateral: u64,
+    /// The other leg, posted by the market maker: USDC (SellSol) or asset (BuySol).
+    pub mm_collateral: u64,
+    /// Paid to the user upfront in the collateral token.
+    pub yield_amount: u64,
+    pub nonce: u64,
+    pub settled: bool,
+    pub bump: u8,
+}
+
+/// Settlement price for a listed asset at one expiry.
+#[account]
+#[derive(InitSpace)]
+pub struct AssetSettlementPrice {
+    pub asset_mint: Pubkey,
+    pub expiry_ts: i64,
+    /// USDC base units per whole token.
+    pub price: u64,
+    pub posted_ts: i64,
+    pub source: PriceSource,
+    pub approvals: [bool; GOVERNANCE_KEYS],
+    pub bump: u8,
+}
+
 /// The exchange happens (sold / bought) when the settlement price crosses the fixed price.
 pub fn exchange_happens(product: Product, settlement_price: u64, fixed_price: u64) -> bool {
     match product {
@@ -129,7 +192,12 @@ pub fn exchange_happens(product: Product, settlement_price: u64, fixed_price: u6
 }
 
 pub fn is_aligned_expiry(expiry_ts: i64) -> bool {
-    expiry_ts > 0 && expiry_ts % SECONDS_PER_DAY == EXPIRY_TIME_OF_DAY
+    is_aligned_expiry_at(expiry_ts, EXPIRY_TIME_OF_DAY)
+}
+
+/// Expiry lands exactly on `time_of_day` seconds after 00:00 UTC.
+pub fn is_aligned_expiry_at(expiry_ts: i64, time_of_day: i64) -> bool {
+    expiry_ts > 0 && expiry_ts % SECONDS_PER_DAY == time_of_day
 }
 
 /// Market maker collateral for a position: the counter-leg of the exchange.
@@ -145,6 +213,26 @@ pub fn mm_collateral_for(product: Product, amount: u64, fixed_price: u64) -> Opt
         Product::BuySol => amount
             .checked_mul(LAMPORTS_PER_SOL)?
             .checked_div(fixed_price)?,
+    };
+    u64::try_from(value).ok()
+}
+
+/// Market maker collateral for a listed-asset position, where the asset has
+/// `decimals` decimals and `fixed_price` is USDC base units per whole token.
+pub fn asset_mm_collateral_for(
+    product: Product,
+    amount: u64,
+    fixed_price: u64,
+    decimals: u8,
+) -> Option<u64> {
+    let amount = amount as u128;
+    let fixed_price = fixed_price as u128;
+    let unit = 10u128.checked_pow(decimals as u32)?;
+    let value = match product {
+        // amount asset base units, paid for in USDC at the fixed price.
+        Product::SellSol => amount.checked_mul(fixed_price)?.checked_div(unit)?,
+        // amount USDC base units buys amount / fixed_price whole tokens.
+        Product::BuySol => amount.checked_mul(unit)?.checked_div(fixed_price)?,
     };
     u64::try_from(value).ok()
 }

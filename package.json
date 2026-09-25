@@ -10,7 +10,8 @@
     "create-test-usdc": "ts-node scripts/create-test-usdc.ts",
     "init-config": "ts-node scripts/initialize-config.ts",
     "post-price": "ts-node scripts/post-settlement-price.ts",
-    "settle": "ts-node scripts/settle.ts"
+    "settle": "ts-node scripts/settle.ts",
+    "list-assets": "ts-node scripts/list-assets.ts"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.32.1",

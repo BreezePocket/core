@@ -101,6 +101,26 @@ npm run init-config -- --usdc-mint <MINT> --poster <PK> --governance <PK1>,<PK2>
 Point the market maker (`MM-system-breezepocket`) at the same RPC, program and mint,
 and use its `simulate-user` script to open a position end to end.
 
+## Listed assets
+
+Besides SOL, governance (3 of 5) can list any SPL token as an asset with `list_asset`:
+its mint, symbol and the UTC time of day its expiries land on. Its positions
+(`open_asset_position` → `AssetPosition`) hold both legs as tokens in the position's two
+associated token accounts, take their settlement price from `post_asset_settlement_price`
+(or the governance override) keyed by mint and expiry, and settle or emergency-cancel
+with the same rules as SOL. USDC itself cannot be listed.
+
+```bash
+# create 9-decimal test mints (WALLET is their mint authority), list them, and give the desk inventory
+SOLANA_SCAN_RPC=https://api.devnet.solana.com \
+  npm run list-assets -- --assets NVDAon@20:00,WBTC@08:00 --mint-to <MM_PUBKEY> --amount 1000000
+# settlement for a listed asset
+WALLET=keys/price-poster.json npm run post-price -- --asset NVDAon --expiry <unix_ts> --price 181.20
+```
+
+On devnet (2026-09-25) the 24 assets the desk prices are listed: WBTC, WETH and the
+PreStocks tokens at 08:00 UTC, the Alpaca-priced equities and ETFs at 20:00 UTC.
+
 ## Settle a position manually
 
 Until the aggregator's settlement job exists, the two steps it will automate are scripts:
@@ -110,7 +130,7 @@ Until the aggregator's settlement job exists, the two steps it will automate are
 WALLET=keys/price-poster.json npm run post-price -- --expiry <unix_ts> --price 212.35
 
 # 30 minutes later (anyone can call settle)
-npm run settle -- --expiry <unix_ts>          # every open position at that expiry
+npm run settle -- --expiry <unix_ts>          # every open position at that expiry, SOL and listed assets
 npm run settle -- --position <pubkey>         # one position
 ```
 

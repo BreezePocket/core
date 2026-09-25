@@ -42,4 +42,10 @@ pub enum ErrorCode {
     InvalidVault,
     #[msg("Account does not match the position's user or market maker")]
     InvalidCounterparty,
+    #[msg("Asset symbol must be 1-16 printable ASCII characters")]
+    InvalidSymbol,
+    #[msg("Expiry time of day must be within [0, 86400) seconds")]
+    InvalidExpiryTimeOfDay,
+    #[msg("USDC cannot be listed as an asset")]
+    AssetIsUsdc,
 }

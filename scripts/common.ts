@@ -3,6 +3,8 @@
  * no key material or RPC URL is ever committed:
  *
  *   SOLANA_RPC     RPC endpoint (default: https://api.testnet.solana.com)
+ *   SOLANA_SCAN_RPC  RPC for getProgramAccounts scans, which some free tiers
+ *                  (e.g. Alchemy) block (default: SOLANA_RPC)
  *   WALLET         path to the signing keypair (default: ~/.config/solana/id.json)
  */
 import * as anchor from "@coral-xyz/anchor";
@@ -116,4 +118,80 @@ export function usdcToBase(usdc: string | number): bigint {
   const [whole, frac = ""] = String(usdc).split(".");
   const fracPadded = (frac + "000000").slice(0, USDC_DECIMALS);
   return BigInt(whole) * 10n ** BigInt(USDC_DECIMALS) + BigInt(fracPadded);
+}
+
+export function assetPda(mint: PublicKey): PublicKey {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("asset"), mint.toBuffer()],
+    PROGRAM_ID
+  )[0];
+}
+
+export function assetPricePda(mint: PublicKey, expiryTs: number): PublicKey {
+  const buf = Buffer.alloc(8);
+  buf.writeBigInt64LE(BigInt(expiryTs));
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("asset_price"), mint.toBuffer(), buf],
+    PROGRAM_ID
+  )[0];
+}
+
+export type ListedAsset = {
+  address: PublicKey;
+  mint: PublicKey;
+  symbol: string;
+  decimals: number;
+  expiryTimeOfDay: number;
+};
+
+/** The program bound to SOLANA_SCAN_RPC, for account scans. */
+export function scanProgram(program: Program<Breezepocket>): Program<Breezepocket> {
+  const url = process.env.SOLANA_SCAN_RPC;
+  if (!url) return program;
+  const provider = new anchor.AnchorProvider(
+    new Connection(url, "confirmed"),
+    program.provider.wallet!,
+    { commitment: "confirmed" }
+  );
+  return new Program<Breezepocket>(IDL, provider);
+}
+
+/** Every asset governance has listed, keyed by symbol. */
+export async function listedAssets(
+  program: Program<Breezepocket>
+): Promise<Map<string, ListedAsset>> {
+  const rows = await scanProgram(program).account.assetConfig.all();
+  return new Map(
+    rows.map((r) => [
+      r.account.symbol,
+      {
+        address: r.publicKey,
+        mint: r.account.mint,
+        symbol: r.account.symbol,
+        decimals: r.account.decimals,
+        expiryTimeOfDay: r.account.expiryTimeOfDay.toNumber(),
+      },
+    ])
+  );
+}
+
+/** A listed asset by symbol (case-insensitive) or mint address. */
+export async function findAsset(
+  program: Program<Breezepocket>,
+  symbolOrMint: string
+): Promise<ListedAsset> {
+  const all = [...(await listedAssets(program)).values()];
+  const hit = all.find(
+    (a) =>
+      a.symbol.toLowerCase() === symbolOrMint.toLowerCase() ||
+      a.mint.toBase58() === symbolOrMint
+  );
+  if (!hit) throw new Error(`asset ${symbolOrMint} is not listed`);
+  return hit;
+}
+
+/** Seconds after 00:00 UTC from "HH:MM". */
+export function timeOfDay(hhmm: string): number {
+  const [h, m = "0"] = hhmm.split(":");
+  return Number(h) * 3600 + Number(m) * 60;
 }

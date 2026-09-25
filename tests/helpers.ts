@@ -43,6 +43,9 @@ export type Product = { sellSol: {} } | { buySol: {} };
 export const SELL_SOL: Product = { sellSol: {} };
 export const BUY_SOL: Product = { buySol: {} };
 export const TOKEN_SOL = { sol: {} };
+/** Every listed asset in the tests: 9 decimals like the devnet test mints. */
+export const ASSET = 1_000_000_000n;
+export const US_CLOSE = 20 * 3600;
 
 export function alignedExpiry(daysAhead: number, from = NOW): number {
   const day = Math.floor(from / DAY) * DAY;
@@ -131,23 +134,50 @@ export class Env {
   }
 
   createUsdcMint() {
+    this.createMint(this.usdcMint, 6);
+  }
+
+  /** A mint with the MM as authority. */
+  createMint(mint: Keypair, decimals: number) {
     const rent = this.svm.minimumBalanceForRentExemption(BigInt(MINT_SIZE));
     const ixs = [
       SystemProgram.createAccount({
         fromPubkey: this.mm.publicKey,
-        newAccountPubkey: this.usdcMint.publicKey,
+        newAccountPubkey: mint.publicKey,
         lamports: Number(rent),
         space: MINT_SIZE,
         programId: TOKEN_PROGRAM_ID,
       }),
       createInitializeMint2Instruction(
-        this.usdcMint.publicKey,
-        6,
+        mint.publicKey,
+        decimals,
         this.mm.publicKey,
         null
       ),
     ];
-    expectOk(this.send(ixs, [this.mm, this.usdcMint]));
+    expectOk(this.send(ixs, [this.mm, mint]));
+  }
+
+  /** Create the owner's ATA for `mint` (if missing) and mint `amount` to it. */
+  mintTokens(mint: PublicKey, owner: PublicKey, amount: bigint) {
+    const ata = this.ata(owner, mint);
+    const ixs: TransactionInstruction[] = [];
+    if (!this.svm.getAccount(ata)) {
+      ixs.push(
+        createAssociatedTokenAccountInstruction(
+          this.mm.publicKey,
+          ata,
+          owner,
+          mint
+        )
+      );
+    }
+    ixs.push(createMintToInstruction(mint, ata, this.mm.publicKey, amount));
+    expectOk(this.send(ixs, [this.mm]));
+  }
+
+  tokenBalance(mint: PublicKey, owner: PublicKey): bigint {
+    return this.tokenAccountBalance(this.ata(owner, mint)) ?? 0n;
   }
 
   ata(owner: PublicKey, mint: PublicKey = this.usdcMint.publicKey): PublicKey {
@@ -443,6 +473,262 @@ export class Env {
       .instruction();
     return this.send([ix], [payer, ...signers]);
   }
+}
+
+/** Listed-asset helpers, on top of a bootstrapped Env. */
+export class AssetEnv extends Env {
+  assetMint = Keypair.generate();
+
+  get mint(): PublicKey {
+    return this.assetMint.publicKey;
+  }
+
+  /** Config, USDC and a 9-decimal asset listed at 20:00 UTC, funded on both sides. */
+  async bootstrapAsset(timeOfDay = US_CLOSE) {
+    await this.bootstrap();
+    this.createMint(this.assetMint, 9);
+    expectOk(
+      await this.listAsset(this.mint, "NVDAon", timeOfDay, this.governance.slice(0, 3))
+    );
+    this.mintTokens(this.mint, this.mm.publicKey, 10_000n * ASSET);
+    this.mintTokens(this.mint, this.user.publicKey, 1_000n * ASSET);
+  }
+
+  assetPda(mint: PublicKey = this.mint): PublicKey {
+    return PublicKey.findProgramAddressSync(
+      [Buffer.from("asset"), mint.toBuffer()],
+      PROGRAM_ID
+    )[0];
+  }
+
+  async listAsset(
+    mint: PublicKey,
+    symbol: string,
+    expiryTimeOfDay: number,
+    signers: Keypair[],
+    payer: Keypair = this.outsider
+  ) {
+    const ix = await this.program.methods
+      .listAsset({ symbol, expiryTimeOfDay: new BN(expiryTimeOfDay) })
+      .accountsStrict({
+        payer: payer.publicKey,
+        config: this.config,
+        assetMint: mint,
+        asset: this.assetPda(mint),
+        systemProgram: SystemProgram.programId,
+      })
+      .remainingAccounts(
+        signers.map((s) => ({
+          pubkey: s.publicKey,
+          isSigner: true,
+          isWritable: false,
+        }))
+      )
+      .instruction();
+    return this.send([ix], [payer, ...signers]);
+  }
+
+  assetPositionPda(
+    user: PublicKey,
+    mm: PublicKey,
+    fixedPrice: bigint,
+    expiryTs: number,
+    nonce: bigint,
+    mint: PublicKey = this.mint
+  ): PublicKey {
+    return PublicKey.findProgramAddressSync(
+      [
+        Buffer.from("asset_position"),
+        user.toBuffer(),
+        mm.toBuffer(),
+        mint.toBuffer(),
+        u64le(fixedPrice),
+        i64le(BigInt(expiryTs)),
+        u64le(nonce),
+      ],
+      PROGRAM_ID
+    )[0];
+  }
+
+  assetPricePda(expiryTs: number, mint: PublicKey = this.mint): PublicKey {
+    return PublicKey.findProgramAddressSync(
+      [Buffer.from("asset_price"), mint.toBuffer(), i64le(BigInt(expiryTs))],
+      PROGRAM_ID
+    )[0];
+  }
+
+  async openAssetPosition(p: OpenArgs) {
+    const user = p.user ?? this.user;
+    const mm = p.mm ?? this.mm;
+    const usdc = p.usdcMint ?? this.usdcMint.publicKey;
+    const mint = this.mint;
+    const position = this.assetPositionPda(
+      user.publicKey,
+      mm.publicKey,
+      p.fixedPrice,
+      p.expiryTs,
+      p.nonce
+    );
+    const ix = await this.program.methods
+      .openAssetPosition({
+        product: p.product as any,
+        fixedPrice: new BN(p.fixedPrice.toString()),
+        expiryTs: new BN(p.expiryTs),
+        amount: new BN(p.amount.toString()),
+        yieldAmount: new BN(p.yieldAmount.toString()),
+        nonce: new BN(p.nonce.toString()),
+      })
+      .accountsStrict({
+        marketMaker: mm.publicKey,
+        user: user.publicKey,
+        config: this.config,
+        asset: this.assetPda(mint),
+        assetMint: mint,
+        usdcMint: usdc,
+        position,
+        positionAssetVault: this.ata(position, mint),
+        positionUsdcVault: this.ata(position, usdc),
+        userAssetAta: this.ata(user.publicKey, mint),
+        userUsdcAta: this.ata(user.publicKey, usdc),
+        mmAssetAta: this.ata(mm.publicKey, mint),
+        mmUsdcAta: this.ata(mm.publicKey, usdc),
+        tokenProgram: TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      })
+      .instruction();
+    const res = this.send([ix], [mm, user], mm.publicKey);
+    return { res, position };
+  }
+
+  async fetchAssetPosition(position: PublicKey) {
+    const acc = this.svm.getAccount(position);
+    if (!acc) throw new Error("asset position account missing");
+    return this.program.coder.accounts.decode(
+      "assetPosition",
+      Buffer.from(acc.data)
+    );
+  }
+
+  async fetchAssetPrice(expiryTs: number) {
+    const acc = this.svm.getAccount(this.assetPricePda(expiryTs));
+    if (!acc) throw new Error("asset settlement price missing");
+    return this.program.coder.accounts.decode(
+      "assetSettlementPrice",
+      Buffer.from(acc.data)
+    );
+  }
+
+  async postAssetPrice(
+    expiryTs: number,
+    price: bigint,
+    poster: Keypair = this.poster
+  ) {
+    const ix = await this.program.methods
+      .postAssetSettlementPrice(new BN(expiryTs), new BN(price.toString()))
+      .accountsStrict({
+        poster: poster.publicKey,
+        config: this.config,
+        asset: this.assetPda(),
+        settlementPrice: this.assetPricePda(expiryTs),
+        systemProgram: SystemProgram.programId,
+      })
+      .instruction();
+    return this.send([ix], [poster]);
+  }
+
+  async overrideAssetPrice(
+    expiryTs: number,
+    price: bigint,
+    signers: Keypair[],
+    payer: Keypair = this.outsider
+  ) {
+    const ix = await this.program.methods
+      .overrideAssetSettlementPrice(new BN(expiryTs), new BN(price.toString()))
+      .accountsStrict({
+        payer: payer.publicKey,
+        config: this.config,
+        asset: this.assetPda(),
+        settlementPrice: this.assetPricePda(expiryTs),
+        systemProgram: SystemProgram.programId,
+      })
+      .remainingAccounts(
+        signers.map((s) => ({
+          pubkey: s.publicKey,
+          isSigner: true,
+          isWritable: false,
+        }))
+      )
+      .instruction();
+    return this.send([ix], [payer, ...signers]);
+  }
+
+  private async payoutAccounts(position: PublicKey) {
+    const pos = await this.fetchAssetPosition(position);
+    const usdc = this.usdcMint.publicKey;
+    return {
+      pos,
+      accounts: {
+        config: this.config,
+        position,
+        user: pos.user,
+        marketMaker: pos.marketMaker,
+        assetMint: pos.assetMint,
+        usdcMint: usdc,
+        positionAssetVault: this.ata(position, pos.assetMint),
+        positionUsdcVault: this.ata(position, usdc),
+        userAssetAta: this.ata(pos.user, pos.assetMint),
+        userUsdcAta: this.ata(pos.user, usdc),
+        mmAssetAta: this.ata(pos.marketMaker, pos.assetMint),
+        mmUsdcAta: this.ata(pos.marketMaker, usdc),
+        tokenProgram: TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      },
+    };
+  }
+
+  async settleAsset(position: PublicKey, caller: Keypair = this.outsider) {
+    const { pos, accounts } = await this.payoutAccounts(position);
+    const ix = await this.program.methods
+      .settleAssetPosition()
+      .accountsStrict({
+        ...accounts,
+        caller: caller.publicKey,
+        settlementPrice: this.assetPricePda(pos.expiryTs.toNumber()),
+      })
+      .instruction();
+    return this.send([ix], [caller]);
+  }
+
+  async emergencyCancelAsset(
+    position: PublicKey,
+    signers: Keypair[],
+    payer: Keypair = this.outsider
+  ) {
+    const { accounts } = await this.payoutAccounts(position);
+    const ix = await this.program.methods
+      .emergencyCancelAssetPosition()
+      .accountsStrict({ ...accounts, payer: payer.publicKey })
+      .remainingAccounts(
+        signers.map((s) => ({
+          pubkey: s.publicKey,
+          isSigner: true,
+          isWritable: false,
+        }))
+      )
+      .instruction();
+    return this.send([ix], [payer, ...signers]);
+  }
+}
+
+export function alignedExpiryAt(
+  daysAhead: number,
+  timeOfDay: number,
+  from = NOW
+): number {
+  const day = Math.floor(from / DAY) * DAY;
+  return day + daysAhead * DAY + timeOfDay;
 }
 
 export interface OpenArgs {
